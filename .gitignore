@@ -1,0 +1,5 @@
+/tube_serial_test_windows/.vs/
+/tube_serial_test_windows/Debug/
+/tube_serial_test_windows/Release/
+/tube_serial_test_windows/x64/
+*.vcxproj.user
