@@ -3,3 +3,4 @@
 /tube_serial_test_windows/Release/
 /tube_serial_test_windows/x64/
 *.vcxproj.user
+*.args.json
