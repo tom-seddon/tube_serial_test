@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <inttypes.h>
+#include <conio.h>
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -121,11 +122,15 @@ static void Recv(const std::string &port_name) {
     int64_t total_num_read = 0;
     constexpr int64_t report_freq = 65536;
     bool io_pending = false;
-    BYTE next_expected_value = 0;
+    int last_value = -1;
     DWORD64 last_io_ticks = GetTickCount64();
     size_t num_errors = 0;
+    size_t error_counts[256] = {};
+    size_t transfer_counts[256] = {};
 
     for (;;) {
+        bool print_errors = false;
+
         if (!io_pending) {
             BOOL ok = ReadFile(port_h, recv_buffer, sizeof recv_buffer, &num_read, &overlapped);
             if (ok) {
@@ -157,25 +162,46 @@ static void Recv(const std::string &port_name) {
 
         if (!io_pending) {
             for (DWORD i = 0; i < num_read; ++i) {
-                if (recv_buffer[i] == next_expected_value) {
-                    ++next_expected_value;
-                } else {
-                    printf("Expected 0x%02x, got 0x%02x", next_expected_value, recv_buffer[i]);
-                    next_expected_value = recv_buffer[i] + 1;
-                    printf(" (will expect 0x%02x next)", next_expected_value);
-                    printf("\n");
+                if (recv_buffer[i] == last_value) {
+                    ++error_counts[recv_buffer[i]];
                     ++num_errors;
+                    if (num_errors % 1000 == 1) {
+                        print_errors = true;
+                    }
+                } else {
+                    ++transfer_counts[recv_buffer[i]];
                 }
-            }
-
-            int64_t old_freq = total_num_read / report_freq;
-            total_num_read += num_read;
-            int64_t new_freq = total_num_read / report_freq;
-            if (old_freq != new_freq) {
-                printf("Read %" PRId64 " bytes total. %zu error(s)\n", total_num_read, num_errors);
+                last_value = recv_buffer[i];
             }
         }
+
+        if (_kbhit()) {
+            int c = tolower(_getch());
+            switch (c) {
+            case 'q':
+                goto done;
+
+            case ' ':
+                print_errors = true;
+                break;
+            }
+        }
+
+        if (print_errors) {
+            printf("Errors:");
+            if (num_errors == 0) {
+                printf("none");
+            } else {
+                for (unsigned i = 0; i < 256; ++i) {
+                    if (error_counts[i] > 0) {
+                        printf(" 0x%02x: %zu/%zu", i, error_counts[i], transfer_counts[i]);
+                    }
+                }
+            }
+            printf("\n");
+        }
     }
+done:;
 
     CloseHandle(port_h), port_h = INVALID_HANDLE_VALUE;
 }
