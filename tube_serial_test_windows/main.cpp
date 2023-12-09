@@ -85,9 +85,9 @@ static void List() {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-static void Recv(const std::string &port_name) {
+static HANDLE OpenPort(const std::string &port_name, DWORD flags) {
     std::string port_path = "\\\\.\\" + port_name;
-    HANDLE port_h = CreateFileA(port_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    HANDLE port_h = CreateFileA(port_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, flags, nullptr);
     if (port_h == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
         Fatal("Failed to open ``%s'': %s", port_path.c_str(), GetWindowsErrorString(err).c_str());
@@ -104,9 +104,18 @@ static void Recv(const std::string &port_name) {
         Fatal("SetCommState failed: %s", GetWindowsErrorString(GetLastError()).c_str());
     }
 
-    if (!PurgeComm(port_h, PURGE_RXABORT | PURGE_RXCLEAR)) {
+    if (!PurgeComm(port_h, PURGE_RXABORT | PURGE_RXCLEAR | PURGE_TXABORT | PURGE_TXCLEAR)) {
         printf("PurgeCommPort failed: %s\n", GetWindowsErrorString(GetLastError()).c_str());
     }
+
+    return port_h;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void Recv(const std::string &port_name) {
+    HANDLE port_h = OpenPort(port_name, FILE_FLAG_OVERLAPPED);
 
     //printf("Setting comm mask: ");
     //if (SetCommMask(port_h, EV_RXCHAR)) {
@@ -209,6 +218,94 @@ done:;
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
+static void PrintValue(BYTE value) {
+    printf("value: %03u (0x%02x)", value, value);
+
+    if (value >= 32 && value < 127) {
+        printf(" ('%c')", (char)value);
+    }
+
+    printf("\n");
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void Write1AndFlush(HANDLE port_h, BYTE value) {
+    DWORD num_written;
+    BOOL write_ok = WriteFile(port_h, &value, 1, &num_written, nullptr);
+    if (!write_ok) {
+        DWORD err = GetLastError();
+        Fatal("write failed: %s", GetWindowsErrorString(err).c_str());
+    } else if (num_written != 1) {
+        Fatal("wrote unexpected number of bytes: %lu", num_written);
+    }
+
+    BOOL flush_ok = FlushFileBuffers(port_h);
+    if (!flush_ok) {
+        DWORD err = GetLastError();
+        Fatal("flush failed: %s", GetWindowsErrorString(err).c_str());
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void EchoOrDrain(const std::string &port_name, bool echo) {
+    HANDLE port_h = OpenPort(port_name, 0);
+
+    uint64_t num_bytes = 0;
+
+    while (!_kbhit()) {
+        BYTE value;
+
+        DWORD num_read;
+        BOOL read_ok = ReadFile(port_h, &value, 1, &num_read, nullptr);
+        if (!read_ok) {
+            DWORD err = GetLastError();
+            Fatal("read failed: %s", GetWindowsErrorString(err).c_str());
+        } else if (num_read != 1) {
+            Fatal("read unexpected number of bytes: %lu", num_read);
+        }
+
+        PrintValue(value);
+
+        if (echo) {
+            Write1AndFlush(port_h, value);
+        }
+
+        ++num_bytes;
+        if (num_bytes % 10000 == 1) {
+            printf("transferred %" PRIu64 " bytes\n", num_bytes);
+        }
+    }
+
+    CloseHandle(port_h), port_h = INVALID_HANDLE_VALUE;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+static void Send(const std::string &port_name) {
+    HANDLE port_h = OpenPort(port_name, 0);
+
+    for (;;) {
+        int c = _getch();
+        if (c == 27) {
+            break;
+        }
+
+        PrintValue((BYTE)c);
+
+        Write1AndFlush(port_h, (BYTE)c);
+    }
+
+    CloseHandle(port_h), port_h = INVALID_HANDLE_VALUE;
+}
+
+//////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         Syntax();
@@ -228,6 +325,21 @@ int main(int argc, char *argv[]) {
         }
 
         Recv(argv[2]);
+    } else if (_stricmp(argv[1], "echo") == 0) {
+        if (argc < 3) {
+            Syntax();
+        }
+        EchoOrDrain(argv[2], true);
+    } else if (_stricmp(argv[1], "drain") == 0) {
+        if (argc < 3) {
+            Syntax();
+        }
+        EchoOrDrain(argv[2], false);
+    } else if (_stricmp(argv[1], "send") == 0) {
+        if (argc < 3) {
+            Syntax();
+        }
+        Send(argv[2]);
     } else {
         Fatal("unrecognised subcommand: %s", argv[1]);
         return 1;
